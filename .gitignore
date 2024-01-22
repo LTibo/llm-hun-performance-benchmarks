@@ -167,3 +167,6 @@ results/
 
 # Data
 data/
+
+# Wandb
+wandb
