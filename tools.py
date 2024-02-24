@@ -15,16 +15,16 @@ from peft import  (
 from tqdm import tqdm
 
 
-def prepare_training_arguments(test:str, output_dir:str, num_train_epochs:int):
+def prepare_training_arguments(test:str, output_dir:str, num_train_epochs:int, per_device_batch_size:int=4):
     training_arguments=None
     if test:
         training_arguments = TrainingArguments(
             output_dir=output_dir,
             evaluation_strategy="steps",
             do_eval=True,
-            per_device_train_batch_size=4,
+            per_device_train_batch_size=per_device_batch_size,
             gradient_accumulation_steps=1,
-            per_device_eval_batch_size=4,
+            per_device_eval_batch_size=per_device_batch_size,
             logging_dir=output_dir,
             log_level="debug",
             optim="paged_adamw_32bit",
@@ -46,9 +46,9 @@ def prepare_training_arguments(test:str, output_dir:str, num_train_epochs:int):
                 save_strategy="epoch",
                 logging_strategy="epoch",
                 do_eval=True,
-                per_device_train_batch_size=4,
+                per_device_train_batch_size=per_device_batch_size,
                 gradient_accumulation_steps=1,
-                per_device_eval_batch_size=4,
+                per_device_eval_batch_size=per_device_batch_size,
                 log_level="debug",
                 optim="paged_adamw_32bit",
                 logging_steps=100, 
@@ -62,14 +62,18 @@ def prepare_training_arguments(test:str, output_dir:str, num_train_epochs:int):
 
     return training_arguments
 
-def prepare_lora_arguments(lora_alpha:int, r:int):
+def prepare_lora_arguments(lora_alpha:int, r:int, extra_linear_layers:list=[]):
+    target_modules = ["q_proj","v_proj"]
+    if extra_linear_layers[0] != None:
+        target_modules = ["q_proj","v_proj"] + extra_linear_layers
+    
     peft_config = LoraConfig(
         lora_alpha=lora_alpha,
         lora_dropout=0.1,
         r=r,
         bias="none",
         task_type="CAUSAL_LM",
-        target_modules= ["q_proj","v_proj"])
+        target_modules=target_modules)
     return peft_config
 
 
@@ -188,7 +192,16 @@ def evaluate_model_for_f1_score(model, tokenizer, dataset: str, result_csv_path:
     f1_all = 0
     with tqdm(total=len(dataset.iloc[:test_row_count]), desc="Testing model") as pbar:
         for index, row in dataset.iloc[:test_row_count].iterrows():
-            given_answer_ = generate_answer(row["context"], row["question"], tokenizer, model)
+            given_answer_ = None
+            try:
+                given_answer_ = generate_answer(row["context"], row["question"], tokenizer, model)
+            except Exception as e:
+                print(f"Skipped row {index} with error: {type(e)}")
+                torch.cuda.empty_cache()
+                continue
+            finally:
+                pbar.update(1)
+            
             given_answer = given_answer_.replace("</s>", '')
             
             f1_score = compute_f1(given_answer, row["answer"])
@@ -199,7 +212,7 @@ def evaluate_model_for_f1_score(model, tokenizer, dataset: str, result_csv_path:
             results["correct_answer"].append(row["answer"])
             results["answer_w_ref"].append(given_answer_)
             
-            pbar.update(1)
+            
             
     results_df=pd.DataFrame(results)
     results_df.to_csv(path.join(result_csv_path,"test_results.csv"), sep=';', index=True)
